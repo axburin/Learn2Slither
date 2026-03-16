@@ -1,19 +1,16 @@
-
-
-
-class Snake :
+class Snake:
 	def __init__(self, body):
 		self.body = body
 		self.alive = True
 
 	def head(self):
 		return self.body[0]
-	
+
 	def next_head(self, direction):
 		head_x, head_y = self.head()
 		dx, dy = direction
-		return(head_x + dx, head_y + dy)
-	
+		return (head_x + dx, head_y + dy)
+
 	def move(self, direction):
 		new_head = tuple(p + d for p, d in zip(self.body[0], direction))
 		self.body.insert(0, new_head)
