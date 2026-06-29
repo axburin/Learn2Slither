@@ -1,123 +1,95 @@
-import tkinter as tk
-from const import GRID_W, GRID_H, NB_CELLS, KEY_BINDINGS, OPPOSITES
-from helpers  import random_snake_body, random_free_cell
-from drawing  import draw_grid, draw_cell
-from snake    import Snake
-from vision import get_vision, print_vision
-from agent import Agent
+from const import (NB_CELLS, ACTION_TO_DIR,
+                   REWARD_GREEN, REWARD_RED, REWARD_STEP, REWARD_DEATH)
+from helpers import random_snake_body, random_free_cell
+from snake import Snake
+from vision import get_vision, vision_to_state, print_vision
 
 
 class Game:
-	"""Main game controller."""
+    def __init__(self, nb_cells=NB_CELLS):
+        self.nb_cells = nb_cells
+        self.snake = None
+        self.apples = []
+        self.done = False
+        self.max_length = 0
+        self.steps = 0
+        self.reset()
 
-	def __init__(self, root):
-		self.root = root
-		self.root.title("Learn2Slither")
+    # ── Setup ─────────────────────────────────────────────────────────────────
 
-		self.canvas = tk.Canvas(root, width=GRID_W, height=GRID_H, bg="grey")
-		self.canvas.pack()
+    def reset(self):
+        body = random_snake_body(nb_cells=self.nb_cells)
+        self.snake = Snake(body)
+        self.apples = []
+        self.done = False
+        self.max_length = len(self.snake.body)
+        self.steps = 0
+        for apple_type, count in [('green', 2), ('red', 1)]:
+            for _ in range(count):
+                self._spawn_apple(apple_type)
 
-		self.snake = None
-		self.apples = []
-		self.occupied = set()
-		self.direction = (0, 1)
-		self.agent = Agent()
+    def _spawn_apple(self, apple_type):
+        occupied = set(self.snake.body) | {a['pos'] for a in self.apples}
+        pos = random_free_cell(occupied, self.nb_cells)
+        self.apples.append({'type': apple_type, 'pos': pos})
 
-		self.root.bind("<KeyPress>", self._on_key)
-		self._init_game()
+    # ── State ─────────────────────────────────────────────────────────────────
 
-	# ── Setup ─────────────────────────────────────────────────────────────────
+    def get_vision(self):
+        return get_vision(self.snake, self.apples, self.nb_cells)
 
-	def _init_game(self):
-		"""Initialize snake and apples."""
-		snake_body = random_snake_body()
-		self.snake = Snake(snake_body)
-		self.occupied.update(self.snake.body)
+    def get_state(self):
+        return vision_to_state(self.get_vision())
 
-		for apple_type, count in [('green', 2), ('red', 1)]:
-			for _ in range(count):
-				self._spawn_apple(apple_type)
+    def print_state(self):
+        print_vision(self.get_vision())
 
-		self.draw()
+    # ── Step ──────────────────────────────────────────────────────────────────
 
-	def _spawn_apple(self, apple_type):
-		"""Spawn a new apple of given type on a free cell."""
-		occupied = set(self.snake.body) | {a['pos'] for a in self.apples}
-		pos = random_free_cell(occupied)
-		self.occupied.add(pos)
-		self.apples.append({'type': apple_type, 'pos': pos})
+    def step(self, action):
+        """Apply action, return (reward, done)."""
+        direction = ACTION_TO_DIR[action]
+        next_head = self.snake.next_head(direction)
 
-	# ── Input ─────────────────────────────────────────────────────────────────
+        # Wall collision
+        x, y = next_head
+        if not (0 <= x < self.nb_cells and 0 <= y < self.nb_cells):
+            self.done = True
+            return REWARD_DEATH, True
 
-	def _on_key(self, event):
-		"""Handle keyboard input to change direction."""
-		new_dir = KEY_BINDINGS.get(event.keysym)
-		if new_dir and new_dir != OPPOSITES.get(self.direction):
-			self.direction = new_dir
+        # Self collision (includes tail: any occupied cell = death)
+        if next_head in self.snake.body[1:]:
+            self.done = True
+            return REWARD_DEATH, True
 
-	# ── Drawing ───────────────────────────────────────────────────────────────
+        # Move: insert new head
+        self.snake.body.insert(0, next_head)
 
-	def draw(self):
-		"""Redraw the entire game state."""
-		self.canvas.delete("all")
-		draw_grid(self.canvas)
+        # Check apple at new head
+        apple_index = self.snake.hits_apples(self.apples)
+        if apple_index is not None:
+            apple = self.apples.pop(apple_index)
+            if apple['type'] == 'green':
+                # Keep tail (snake grows)
+                reward = REWARD_GREEN
+                self._spawn_apple('green')
+            else:
+                # Remove tail (normal move) + one more (shrink)
+                self.snake.body.pop()
+                if self.snake.body:
+                    self.snake.body.pop()
+                reward = REWARD_RED
+                self._spawn_apple('red')
+                if not self.snake.body:
+                    self.done = True
+                    return REWARD_DEATH, True
+        else:
+            self.snake.body.pop()
+            reward = REWARD_STEP
 
-		for (x, y) in self.snake.body:
-			draw_cell(self.canvas, x, y, "blue")
+        self.steps += 1
+        length = len(self.snake.body)
+        if length > self.max_length:
+            self.max_length = length
 
-		for apple in self.apples:
-			color = "green" if apple['type'] == 'green' else "red"
-			draw_cell(self.canvas, *apple['pos'], color)
-
-	# ── Logic ─────────────────────────────────────────────────────────────────
-
-	def _handle_apple(self, apple_index):
-		"""Apply the effect of eating an apple."""
-		apple = self.apples[apple_index]
-
-		if apple['type'] == 'green':
-			self.snake.body.append(self.snake.body[-1])  # grow
-		elif apple['type'] == 'red':
-			if len(self.snake.body) > 1:
-				self.snake.body.pop()                    # shrink
-
-		self.occupied.discard(apple['pos'])
-		self.apples.pop(apple_index)
-		self._spawn_apple(apple['type'])
-
-	def move_snake(self):
-		"""Move the snake and handle apple collisions."""
-		self.snake.move(self.direction)
-
-		apple_index = self.snake.hits_apples(self.apples)
-		if apple_index is not None:
-			self._handle_apple(apple_index)
-
-		self.draw()
-
-	def _game_over(self, reason):
-		"""Stop the game and print the reason."""
-		print(f"Game Over : {reason}")
-		self.root.destroy()
-
-	# ── Game loop ─────────────────────────────────────────────────────────────
-
-	def autoplay(self):
-		"""Main game loop: check collisions, move, repeat."""
-		if len(self.snake.body) == 0:
-			self._game_over("le snake a disparu")
-			return
-		
-		if self.snake.hits_wall(self.snake.next_head(self.direction), NB_CELLS):
-			self._game_over("le snake a touché un mur")
-			return
-		if self.snake.hits_self():
-			self._game_over("le snake s'est mordu")
-			return
-		
-		vision = get_vision(self.snake, self.apples)
-		print_vision(vision)
-		action = self.agent.get_action(vision)
-		self.direction = KEY_BINDINGS[action]
-		self.move_snake()
-		self.root.after(200, self.autoplay)
+        return reward, False
